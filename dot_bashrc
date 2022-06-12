@@ -1,0 +1,343 @@
+#
+# ~/.bashrc
+#
+
+# If not running interactively, don't do anything
+[[ $- != *i* ]] && return
+
+[[ -f ~/.welcome_screen ]] && . ~/.welcome_screen
+
+colors() {
+	local fgc bgc vals seq0
+
+	printf "Color escapes are %s\n" '\e[${value};...;${value}m'
+	printf "Values 30..37 are \e[33mforeground colors\e[m\n"
+	printf "Values 40..47 are \e[43mbackground colors\e[m\n"
+	printf "Value  1 gives a  \e[1mbold-faced look\e[m\n\n"
+
+	# foreground colors
+	for fgc in {30..37}; do
+		# background colors
+		for bgc in {40..47}; do
+			fgc=${fgc#37} # white
+			bgc=${bgc#40} # black
+
+			vals="${fgc:+$fgc;}${bgc}"
+			vals=${vals%%;}
+
+			seq0="${vals:+\e[${vals}m}"
+			printf "  %-9s" "${seq0:-(default)}"
+			printf " ${seq0}TEXT\e[m"
+			printf " \e[${vals:+${vals+$vals;}}1mBOLD\e[m"
+		done
+		echo; echo
+	done
+}
+
+[ -r /usr/share/bash-completion/bash_completion ] && . /usr/share/bash-completion/bash_completion
+
+_set_my_PS1() {
+    PS1='[\u@\h \W]\$ '
+    if [ "$(whoami)" = "liveuser" ] ; then
+        local iso_version="$(grep ^VERSION= /usr/lib/endeavouros-release 2>/dev/null | cut -d '=' -f 2)"
+        if [ -n "$iso_version" ] ; then
+            local prefix="eos-"
+            local iso_info="$prefix$iso_version"
+            PS1="[\u@$iso_info \W]\$ "
+        fi
+    fi
+}
+_set_my_PS1
+unset -f _set_my_PS1
+
+ShowInstallerIsoInfo() {
+    local file=/usr/lib/endeavouros-release
+    if [ -r $file ] ; then
+        cat $file
+    else
+        echo "Sorry, installer ISO info is not available." >&2
+    fi
+}
+
+
+alias ls='ls --color=auto'
+alias ll='ls -lav --ignore=..'   # show long listing of all except ".."
+alias l='ls -lav --ignore=.?*'   # show long listing but no hidden dotfiles except "."
+alias cp="cp -i"                          # confirm before overwriting something
+alias df='df -h'                          # human-readable sizes
+alias free='free -m'                      # show sizes in MB
+alias np='nano -w PKGBUILD'
+alias more=less
+alias vi=nvim
+alias vim=nvim
+
+[[ "$(whoami)" = "root" ]] && return
+
+[[ -z "$FUNCNEST" ]] && export FUNCNEST=100          # limits recursive functions, see 'man bash'
+
+## Use the up and down arrow keys for finding a command in history
+## (you can write some initial letters of the command first).
+bind '"\e[A":history-search-backward'
+bind '"\e[B":history-search-forward'
+
+################################################################################
+## Some generally useful functions.
+## Consider uncommenting aliases below to start using these functions.
+
+
+_GeneralCmdCheck() {
+    # A helper for functions UpdateArchPackages and UpdateAURPackages.
+
+    echo "$@" >&2
+    "$@" || {
+        echo "Error: '$*' failed." >&2
+        exit 1
+    }
+}
+
+_CheckInternetConnection() {
+    # curl --silent --connect-timeout 8 https://8.8.8.8 >/dev/null
+    eos-connection-checker
+    local result=$?
+    test $result -eq 0 || echo "No internet connection!" >&2
+    return $result
+}
+
+_CheckArchNews() {
+    local conf=/etc/eos-update-notifier.conf
+
+    if [ -z "$CheckArchNewsForYou" ] && [ -r $conf ] ; then
+        source $conf
+    fi
+
+    if [ "$CheckArchNewsForYou" = "yes" ] ; then
+        local news="$(yay -Pw)"
+        if [ -n "$news" ] ; then
+            echo "Arch news:" >&2
+            echo "$news" >&2
+            echo "" >&2
+            # read -p "Press ENTER to continue (or Ctrl-C to stop): "
+        else
+            echo "No Arch news." >&2
+        fi
+    fi
+}
+
+UpdateArchPackages() {
+    # Updates Arch packages.
+
+    _CheckInternetConnection || return 1
+
+    _CheckArchNews
+
+    #local updates="$(yay -Qu --repo)"
+    local updates="$(checkupdates)"
+    if [ -n "$updates" ] ; then
+        echo "Updates from upstream:" >&2
+        echo "$updates" | sed 's|^|    |' >&2
+        _GeneralCmdCheck sudo pacman -Syu "$@"
+        return 0
+    else
+        echo "No upstream updates." >&2
+        return 1
+    fi
+}
+
+UpdateAURPackages() {
+    # Updates AUR packages.
+
+    _CheckInternetConnection || return 1
+
+    local updates
+    if [ -x /usr/bin/yay ] ; then
+        updates="$(yay -Qua)"
+        if [ -n "$updates" ] ; then
+            echo "Updates from AUR:" >&2
+            echo "$updates" | sed 's|^|    |' >&2
+            _GeneralCmdCheck yay -Syua "$@"
+        else
+            echo "No AUR updates." >&2
+        fi
+    else
+        echo "Warning: /usr/bin/yay does not exist." >&2
+    fi
+}
+
+UpdateAllPackages() {
+    # Updates all packages in the system.
+    # Upstream (i.e. Arch) packages are updated first.
+    # If there are Arch updates, you should run
+    # this function a second time to update
+    # the AUR packages too.
+
+    UpdateArchPackages || UpdateAURPackages
+}
+
+
+_open_files_for_editing() {
+    # Open any given document file(s) for editing (or just viewing).
+    # Note1: Do not use for executable files!
+    # Note2: uses mime bindings, so you may need to use
+    #        e.g. a file manager to make some file bindings.
+
+    if [ -x /usr/bin/exo-open ] ; then
+        echo "exo-open $*" >&2
+        /usr/bin/exo-open "$@" >& /dev/null &
+        return
+    fi
+    if [ -x /usr/bin/xdg-open ] ; then
+        for file in "$@" ; do
+            echo "xdg-open $file" >&2
+            /usr/bin/xdg-open "$file" >& /dev/null &
+        done
+        return
+    fi
+
+    echo "Sorry, none of programs [$progs] is found." >&2
+    echo "Tip: install one of packages" >&2
+    for prog in $progs ; do
+        echo "    $(pacman -Qqo "$prog")" >&2
+    done
+}
+
+_Pacdiff() {
+    local differ pacdiff=/usr/bin/pacdiff
+
+    if [ -n "$(echo q | DIFFPROG=diff $pacdiff)" ] ; then
+        for differ in kdiff3 meld diffuse ; do
+            if [ -x /usr/bin/$differ ] ; then
+                DIFFPROG=$differ su-c_wrapper $pacdiff
+                break
+            fi
+        done
+    fi
+}
+
+#------------------------------------------------------------
+
+## Aliases for the functions above.
+## Uncomment an alias if you want to use it.
+##
+
+# alias ef='_open_files_for_editing'     # 'ef' opens given file(s) for editing
+# alias pacdiff=_Pacdiff
+################################################################################
+
+# If not running interactively, don't do anything
+case $- in
+  *i*) ;;
+    *) return;;
+esac
+
+# Path to the bash it configuration
+export BASH_IT="/home/gimpy/.bash_it"
+
+# Lock and Load a custom theme file.
+# Leave empty to disable theming.
+# location /.bash_it/themes/
+export BASH_IT_THEME='gimpy'
+
+export BASH_IT_CUSTOM="/home/gimpy/.bash_it.d/"
+
+# (Advanced): Change this to the name of your remote repo if you
+# cloned bash-it with a remote other than origin such as `bash-it`.
+# export BASH_IT_REMOTE='bash-it'
+
+# (Advanced): Change this to the name of the main development branch if
+# you renamed it or if it was changed for some reason
+# export BASH_IT_DEVELOPMENT_BRANCH='master'
+
+# Your place for hosting Git repos. I use this for private repos.
+export GIT_HOSTING='git@git.domain.com'
+
+# Don't check mail when opening terminal.
+unset MAILCHECK
+
+# Change this to your console based IRC client of choice.
+export IRC_CLIENT='irssi'
+
+# Set this to the command you use for todo.txt-cli
+export TODO="t"
+
+# Set this to false to turn off version control status checking within the prompt for all themes
+export SCM_CHECK=true
+# Set to actual location of gitstatus directory if installed
+#export SCM_GIT_GITSTATUS_DIR="$HOME/gitstatus"
+# per default gitstatus uses 2 times as many threads as CPU cores, you can change this here if you must
+#export GITSTATUS_NUM_THREADS=8
+
+# Set Xterm/screen/Tmux title with only a short hostname.
+# Uncomment this (or set SHORT_HOSTNAME to something else),
+# Will otherwise fall back on $HOSTNAME.
+#export SHORT_HOSTNAME=$(hostname -s)
+
+# Set Xterm/screen/Tmux title with only a short username.
+# Uncomment this (or set SHORT_USER to something else),
+# Will otherwise fall back on $USER.
+#export SHORT_USER=${USER:0:8}
+
+# If your theme use command duration, uncomment this to
+# enable display of last command duration.
+#export BASH_IT_COMMAND_DURATION=true
+# You can choose the minimum time in seconds before
+# command duration is displayed.
+#export COMMAND_DURATION_MIN_SECONDS=1
+
+# Set Xterm/screen/Tmux title with shortened command and directory.
+# Uncomment this to set.
+#export SHORT_TERM_LINE=true
+
+# Set vcprompt executable path for scm advance info in prompt (demula theme)
+# https://github.com/djl/vcprompt
+#export VCPROMPT_EXECUTABLE=~/.vcprompt/bin/vcprompt
+
+# (Advanced): Uncomment this to make Bash-it reload itself automatically
+# after enabling or disabling aliases, plugins, and completions.
+# export BASH_IT_AUTOMATIC_RELOAD_AFTER_CONFIG_CHANGE=1
+
+# Uncomment this to make Bash-it create alias reload.
+# export BASH_IT_RELOAD_LEGACY=1
+
+eval $(thefuck --alias)
+
+export GOPATH=
+export PATH="${PATH}:${HOME}/go/bin"
+
+# Base16 Shell
+BASE16_SHELL="$HOME/.config/base16-shell/"
+[ -n "$PS1" ] && \
+    [ -s "$BASE16_SHELL/profile_helper.sh" ] && \
+        eval "$("$BASE16_SHELL/profile_helper.sh")"
+
+export PYENV_ROOT="$HOME/.pyenv"
+export PATH="$PYENV_ROOT/bin:$PATH"
+eval "$(pyenv init --path)"
+
+# Pyenv
+eval "$(pyenv init -)"
+
+# tfenv
+export PATH="${HOME}/.tfenv/bin:$PATH"
+
+export SSH_AUTH_SOCK="$XDG_RUNTIME_DIR/ssh-agent.socket"
+
+#if [ ! -S ~/.ssh/ssh_auth_sock ]; then
+#  eval `ssh-agent`
+#  ln -sf "$SSH_AUTH_SOCK" ~/.ssh/ssh_auth_sock
+#fi
+#export SSH_AUTH_SOCK=~/.ssh/ssh_auth_sock
+#ssh-add -l > /dev/null || ssh-add
+
+# Load Bash It
+source "$BASH_IT"/bash_it.sh
+
+
+# BEGIN_KITTY_SHELL_INTEGRATION
+if test -n "$KITTY_INSTALLATION_DIR" -a -e "$KITTY_INSTALLATION_DIR/shell-integration/bash/kitty.bash"; then source "$KITTY_INSTALLATION_DIR/shell-integration/bash/kitty.bash"; fi
+# END_KITTY_SHELL_INTEGRATION
+
+# Source in secrets if they exist
+if [ -f ${HOME}/.bashrc.secrets ]
+then
+  source ~/.bashrc.secrets
+fi
